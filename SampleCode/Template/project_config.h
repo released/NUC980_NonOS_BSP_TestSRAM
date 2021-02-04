@@ -8,7 +8,8 @@ extern volatile uint32_t BitFlag;
 
 typedef enum{
 	flag_start = 0 ,
-
+		
+	flag_Transmit_end ,
 
 	flag_error ,		
 	flag_DEFAULT	

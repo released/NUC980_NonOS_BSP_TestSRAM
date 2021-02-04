@@ -6,18 +6,23 @@
 #include "gpio.h"
 #include "uart.h"
 #include "etimer.h"
+#include "pdma.h"
 
 #include	"project_config.h"
 
 
 /*_____ D E C L A R A T I O N S ____________________________________________*/
+//uint8_t  pdmaTestBuffer[TEST_BUFFER_SIZE] __attribute__((aligned(32))); 
+uint8_t  *pdmaBuff;
+
 
 /*_____ D E F I N I T I O N S ______________________________________________*/
 
 #define TEST_BUFFER_SIZE   						(50000)
 #define NON_CACHE_MEMORY_MASK   	 			(0x80000000)
 
-
+#define SRAM_DMA_CH 							(0)
+#define SRAM_DMA_OPENED_CH   					(1 << SRAM_DMA_CH)
 
 /*_____ M A C R O S ________________________________________________________*/
 
@@ -139,6 +144,67 @@ void  dump_buffer_hex(uint8_t *pucBuff, int nBytes)
     printf("\r\n");
 }
 
+void PDMA_TransmitFinish(void)
+{
+	while(!is_flag_set(flag_Transmit_end));
+	
+}
+
+
+void PDMA_memcpy(uint8_t* desc , uint8_t* src , uint32_t len)
+{
+	set_flag(flag_Transmit_end,DISABLE);
+
+    /* Transfer count is PDMA_TEST_LENGTH, transfer width is 32 bits(one word) */
+    PDMA_SetTransferCnt(PDMA0,SRAM_DMA_CH, PDMA_WIDTH_8, len);
+    /* Set source address is au8SrcArray, destination address is au8DestArray, Source/Destination increment size is 32 bits(one word) */
+    PDMA_SetTransferAddr(PDMA0,SRAM_DMA_CH, (uint32_t)src, PDMA_SAR_INC, (uint32_t)desc, PDMA_DAR_INC);
+    /* Request source is memory to memory */
+    PDMA_SetTransferMode(PDMA0,SRAM_DMA_CH, PDMA_MEM, FALSE, 0);
+    /* Transfer type is burst transfer and burst size is 4 */
+    PDMA_SetBurstType(PDMA0,SRAM_DMA_CH, PDMA_REQ_BURST, PDMA_BURST_4);
+
+    /* Enable interrupt */
+    PDMA_EnableInt(PDMA0,SRAM_DMA_CH, PDMA_INT_TRANS_DONE);
+
+    PDMA_Trigger(PDMA0,SRAM_DMA_CH);
+
+	PDMA_TransmitFinish();
+}
+
+void PDMA0_IRQHandler(void)
+{
+    uint32_t status = PDMA_GET_INT_STATUS(PDMA0);
+
+    if(status & PDMA_INTSTS_ABTIF_Msk)    /* abort */
+    {
+        PDMA_CLR_ABORT_FLAG(PDMA0, PDMA_GET_ABORT_STS(PDMA0));
+    }
+    else if(status & PDMA_INTSTS_TDIF_Msk)      /* done */
+    {
+        if((PDMA_GET_TD_STS(PDMA0) & SRAM_DMA_OPENED_CH) == SRAM_DMA_OPENED_CH)
+        {
+            /* Clear PDMA transfer done interrupt flag */
+            PDMA_CLR_TD_FLAG(PDMA0, SRAM_DMA_OPENED_CH);
+
+			set_flag(flag_Transmit_end,ENABLE);
+        } 
+    }
+    else
+        printf("unknown interrupt !!\n");
+}
+
+
+void PDMA_Init(void)
+{
+    sysInstallISR(IRQ_LEVEL_1, IRQ_PDMA0, (PVOID)PDMA0_IRQHandler);
+    sysSetLocalInterrupt(ENABLE_IRQ);
+    sysEnableInterrupt(IRQ_PDMA0);
+
+    PDMA_Open(PDMA0,SRAM_DMA_OPENED_CH);
+	
+}
+
 
 void CacheTest(void)
 {
@@ -150,6 +216,7 @@ void CacheTest(void)
    static uint32_t u32Count;
    static uint32_t u32Times;
 
+   pdmaBuff = (uint8_t *)((UINT32)&bTestBuffer[0] | NON_CACHE_MEMORY_MASK);
    
    for (i = 0; i < TEST_BUFFER_SIZE; i++)
    {
@@ -166,6 +233,21 @@ void CacheTest(void)
 
       memset((uint8_t*)bNonCacheTestBuffer, 0, TEST_BUFFER_SIZE);
       memcpy((uint8_t*)bNonCacheTestBuffer, bTestPattern, TEST_BUFFER_SIZE);
+
+      memset((uint8_t*)pdmaBuff, 0, TEST_BUFFER_SIZE);
+      PDMA_memcpy((uint8_t*)pdmaBuff, bTestPattern, TEST_BUFFER_SIZE);
+
+      if (memcmp((uint8_t*)pdmaBuff, bTestPattern, TEST_BUFFER_SIZE) != 0)
+      {
+         printf("\n PDMA Data compare fail!\r\n");
+         printf("\nTEST pattern\r\n");		 
+         dump_buffer_hex(bTestPattern, TEST_BUFFER_SIZE);
+         printf("\nPDMA TEST non cache buffer\r\n");			 
+         dump_buffer_hex((uint8_t*)pdmaBuff, TEST_BUFFER_SIZE);
+         printf("\n*** END! ***\r\n");
+         while (TRUE);	 
+      }
+	  
       if (memcmp((uint8_t*)bNonCacheTestBuffer, bTestPattern, TEST_BUFFER_SIZE) != 0)
       {
          printf("\nData compare fail!\r\n");
@@ -282,6 +364,8 @@ void SYS_Init(void)
 
     outpw(REG_CLK_HCLKEN, inpw(REG_CLK_HCLKEN)|(1<<11)); //Enable GPIO engine
 
+    outpw(REG_CLK_HCLKEN, inpw(REG_CLK_HCLKEN)|(1<<12)); //Enable PDMA0 engine	
+
 }
 
 /*---------------------------------------------------------------------------------------------------------*/
@@ -295,7 +379,7 @@ int32_t main(void)
     UART_Init();
 
     ETIMER0_Init();
-	
+	PDMA_Init();
 
 	CacheTest();
 

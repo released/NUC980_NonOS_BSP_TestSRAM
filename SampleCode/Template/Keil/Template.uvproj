@@ -471,6 +471,11 @@
               <FileType>1</FileType>
               <FilePath>..\..\..\Driver\Source\uart.c</FilePath>
             </File>
+            <File>
+              <FileName>pdma.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\..\..\Driver\Source\pdma.c</FilePath>
+            </File>
           </Files>
         </Group>
       </Groups>
